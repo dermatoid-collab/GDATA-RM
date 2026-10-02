@@ -118,7 +118,7 @@ dislivello, quota, distanza, distanza alla meta, tempo, tempo giro, W' residuo,
 CHO, potenza step, potenza 30 s, % FC max, calorie.
 
 Su schermi bassi (Edge 530/830/540/840) sono visibili i primi 6 riquadri, su
-quelli alti (1040/1050/Explore 2) tutti e 8..
+quelli alti (1040/1050/Explore 2) tutti e 8.
 
 ## Build e installazione
 
