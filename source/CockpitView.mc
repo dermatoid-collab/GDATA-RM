@@ -241,23 +241,24 @@ class CockpitView extends WatchUi.DataField {
 
         var topH = h * 35 / 100;
         var font = Graphics.FONT_XTINY;
+        var next = _str[:end];
+        if (wk.hasNext) {
+            next = _str[:next] + " " + durationText(wk.nextDurationType, wk.nextDuration);
+            var tgt = targetText(wk.nextTargetType, wk.nextLow, wk.nextHigh);
+            next += " " + (tgt.length() > 0 ? tgt + targetUnit(wk.nextTargetType) : intensityName(wk.nextIntensity));
+        }
         var title = "#" + wk.stepNumber + " " + intensityName(wk.intensity);
+        // Drop the step name when it would run into the next-step preview.
         if (wk.name.length() > 0) {
-            title += " " + wk.name;
+            var full = title + " " + wk.name;
+            if (dc.getTextWidthInPixels(full, font) + dc.getTextWidthInPixels(next, font) + 8 <= w - 14) {
+                title = full;
+            }
         }
         dc.setColor(_fg, Graphics.COLOR_TRANSPARENT);
         dc.drawText(x + 10, y + topH / 2, font, title, Draw.LEFT);
-
-        if (wk.hasNext) {
-            var next = _str[:next] + " " + durationText(wk.nextDurationType, wk.nextDuration);
-            var tgt = targetText(wk.nextTargetType, wk.nextLow, wk.nextHigh);
-            next += " " + (tgt.length() > 0 ? tgt + targetUnit(wk.nextTargetType) : intensityName(wk.nextIntensity));
-            dc.setColor(_dim, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(x + w - 4, y + topH / 2, font, next, Draw.RIGHT);
-        } else {
-            dc.setColor(_dim, Graphics.COLOR_TRANSPARENT);
-            dc.drawText(x + w - 4, y + topH / 2, font, _str[:end], Draw.RIGHT);
-        }
+        dc.setColor(_dim, Graphics.COLOR_TRANSPARENT);
+        dc.drawText(x + w - 4, y + topH / 2, font, next, Draw.RIGHT);
 
         var by = y + topH;
         var bh = h - topH;
