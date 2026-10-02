@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+"""Generate the repetitive Connect IQ resources for GDATA-RM.
+
+Settings for the 16 tile slots each need their own list of metrics, which is
+tedious to keep in sync by hand. Run this script after changing METRICS,
+SLOT defaults or strings:
+
+    python3 tools/gen_resources.py
+"""
+import os
+import struct
+import zlib
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# id, tile label EN, tile label IT, settings name EN, settings name IT
+# The ids must match the M_* constants in source/Metrics.mc.
+METRICS = [
+    (0, "", "", "None", "Nessuno"),
+    (1, "HR", "FC", "Heart rate (zone)", "Frequenza cardiaca (zona)"),
+    (2, "CAD", "CAD", "Cadence", "Cadenza"),
+    (3, "SPEED", "VEL", "Speed", "Velocità"),
+    (4, "AVG SPD", "VEL MED", "Average speed", "Velocità media"),
+    (5, "LAP W", "W GIRO", "Lap average power", "Potenza media giro"),
+    (6, "AVG W", "W MED", "Average power", "Potenza media"),
+    (7, "NP", "NP", "Normalized Power", "Normalized Power"),
+    (8, "IF", "IF", "Intensity Factor", "Intensity Factor"),
+    (9, "TSS", "TSS", "Training Stress Score", "Training Stress Score"),
+    (10, "KJ", "KJ", "Work (kJ)", "Lavoro (kJ)"),
+    (11, "W/KG", "W/KG", "Power to weight", "Rapporto peso/potenza"),
+    (12, "GRADE", "PEND", "Grade", "Pendenza"),
+    (13, "VAM", "VAM", "VAM (vertical m/h)", "VAM (m/h verticali)"),
+    (14, "ASCENT", "DISL+", "Total ascent", "Dislivello positivo"),
+    (15, "ALT", "QUOTA", "Altitude", "Quota"),
+    (16, "DIST", "DIST", "Distance", "Distanza"),
+    (17, "TO GO", "ALLA META", "Distance to destination", "Distanza alla meta"),
+    (18, "TIME", "TEMPO", "Timer", "Tempo"),
+    (19, "LAP T", "T GIRO", "Lap time", "Tempo giro"),
+    (20, "W'BAL", "W'BAL", "W' balance", "W' residuo"),
+    (21, "CHO", "CHO", "Carbohydrates burnt", "Carboidrati consumati"),
+    (22, "STEP W", "W STEP", "Workout step avg power", "Potenza media step"),
+    (23, "30s W", "W 30s", "30 s power", "Potenza 30 s"),
+    (24, "%HRMAX", "%FCMAX", "Heart rate % max", "FC % della max"),
+    (25, "KCAL", "KCAL", "Calories", "Calorie"),
+]
+
+WORKOUT_SLOTS = [1, 2, 22, 3, 7, 9, 8, 10]
+RACE_SLOTS = [1, 2, 3, 12, 7, 13, 14, 17]
+
+# key, type, default, EN title, IT title, config
+NUMERIC = [
+    ("ftp", 250, "FTP (W)", "FTP (W)", 50, 700),
+    ("cp", 0, "Critical Power W (0 = FTP)", "Potenza critica W (0 = FTP)", 0, 700),
+    ("wprime", 20000, "W' (J)", "W' (J)", 3000, 60000),
+    ("weight", 0, "Weight kg (0 = user profile)", "Peso kg (0 = profilo utente)", 0, 200),
+    ("eatMin", 20, "Eat reminder, minutes (0 = off)", "Promemoria cibo, minuti (0 = off)", 0, 120),
+    ("drinkMin", 15, "Drink reminder, minutes (0 = off)", "Promemoria bere, minuti (0 = off)", 0, 120),
+    ("wbalAlert", 25, "W' low alert % (0 = off)", "Avviso W' basso % (0 = off)", 0, 90),
+]
+
+STRINGS = [
+    # id, EN, IT
+    ("AppName", "GDATA Cockpit", "GDATA Cockpit"),
+    ("Power", "PWR", "PWR"),
+    ("Eat", "EAT", "CIBO"),
+    ("Drink", "DRINK", "BERE"),
+    ("AlertEat", "EAT!", "MANGIA!"),
+    ("AlertDrink", "DRINK!", "BEVI!"),
+    ("AlertWbal", "W' LOW", "W' BASSO"),
+    ("AlertFeed", "Feed", "Rifornimento"),
+    ("AlertWbalSub", "Ease off and recover", "Molla e recupera"),
+    ("Next", "NEXT", "POI"),
+    ("Open", "OPEN", "LIBERO"),
+    ("IntActive", "WORK", "LAVORO"),
+    ("IntRest", "REST", "RIPOSO"),
+    ("IntWarmup", "WARM UP", "RISCALDAMENTO"),
+    ("IntCooldown", "COOL DOWN", "DEFATICAMENTO"),
+    ("IntRecovery", "RECOVERY", "RECUPERO"),
+    ("IntInterval", "INTERVAL", "INTERVALLO"),
+    ("End", "END", "FINE"),
+    ("SetMode", "Cockpit mode", "Modalità cockpit"),
+    ("ModeAuto", "Auto (workout if loaded)", "Auto (workout se caricato)"),
+    ("ModeRace", "Always race", "Sempre gara"),
+    ("SetSmooth", "Main power smoothing", "Media potenza principale"),
+    ("Smooth1", "1 s", "1 s"),
+    ("Smooth3", "3 s", "3 s"),
+    ("Smooth5", "5 s", "5 s"),
+    ("Smooth10", "10 s", "10 s"),
+    ("SetFit", "Record to FIT file", "Registra nel file FIT"),
+    ("FitWbal", "W' balance", "W' residuo"),
+    ("FitNp", "Normalized Power", "Normalized Power"),
+    ("FitTss", "TSS", "TSS"),
+    ("FitCho", "Carbohydrates burnt", "Carboidrati consumati"),
+    ("FitWbalMin", "Minimum W' balance", "W' residuo minimo"),
+    ("UnitJ", "J", "J"),
+    ("UnitW", "W", "W"),
+    ("UnitG", "g", "g"),
+]
+
+
+def esc(s):
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def write(rel, text):
+    path = os.path.join(ROOT, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    print("wrote", rel)
+
+
+def slot_title(prefix, i, lang):
+    if lang == "en":
+        return ("Workout" if prefix == "w" else "Race") + " tile %d" % (i + 1)
+    return "Riquadro " + ("workout" if prefix == "w" else "gara") + " %d" % (i + 1)
+
+
+def strings_xml(lang):
+    col = 1 if lang == "en" else 2
+    out = ['<!-- Generated by tools/gen_resources.py, do not edit by hand. -->',
+           "<strings>"]
+    for row in STRINGS:
+        out.append('    <string id="%s">%s</string>' % (row[0], esc(row[col])))
+    for m in METRICS:
+        lab = m[1] if lang == "en" else m[2]
+        out.append('    <string id="L%d">%s</string>' % (m[0], esc(lab) if lab else "-"))
+        name = m[3] if lang == "en" else m[4]
+        out.append('    <string id="S%d">%s</string>' % (m[0], esc(name)))
+    for key, _d, en, it, _lo, _hi in NUMERIC:
+        out.append('    <string id="Set_%s">%s</string>' % (key, esc(en if lang == "en" else it)))
+    for prefix in ("w", "r"):
+        for i in range(8):
+            out.append('    <string id="Set_%s%d">%s</string>' % (prefix, i, esc(slot_title(prefix, i, lang))))
+    out.append("</strings>")
+    return "\n".join(out) + "\n"
+
+
+def properties_xml():
+    out = ['<!-- Generated by tools/gen_resources.py, do not edit by hand. -->',
+           "<resources>", "    <properties>"]
+    for key, d, *_ in NUMERIC:
+        out.append('        <property id="%s" type="number">%d</property>' % (key, d))
+    out.append('        <property id="mode" type="number">0</property>')
+    out.append('        <property id="smooth" type="number">3</property>')
+    out.append('        <property id="fitRecord" type="boolean">true</property>')
+    for prefix, slots in (("w", WORKOUT_SLOTS), ("r", RACE_SLOTS)):
+        for i, v in enumerate(slots):
+            out.append('        <property id="%s%d" type="number">%d</property>' % (prefix, i, v))
+    out += ["    </properties>", "", "    <settings>"]
+
+    def lst(key, title, entries):
+        out.append('        <setting propertyKey="@Properties.%s" title="@Strings.%s">' % (key, title))
+        out.append('            <settingConfig type="list">')
+        for v, sid in entries:
+            out.append('                <listEntry value="%d">@Strings.%s</listEntry>' % (v, sid))
+        out.append("            </settingConfig>")
+        out.append("        </setting>")
+
+    lst("mode", "SetMode", [(0, "ModeAuto"), (1, "ModeRace")])
+    for key, _d, _en, _it, lo, hi in NUMERIC:
+        out.append('        <setting propertyKey="@Properties.%s" title="@Strings.Set_%s">' % (key, key))
+        out.append('            <settingConfig type="numeric" min="%d" max="%d" />' % (lo, hi))
+        out.append("        </setting>")
+    lst("smooth", "SetSmooth", [(1, "Smooth1"), (3, "Smooth3"), (5, "Smooth5"), (10, "Smooth10")])
+    out.append('        <setting propertyKey="@Properties.fitRecord" title="@Strings.SetFit">')
+    out.append('            <settingConfig type="boolean" />')
+    out.append("        </setting>")
+    for prefix in ("w", "r"):
+        for i in range(8):
+            lst("%s%d" % (prefix, i), "Set_%s%d" % (prefix, i), [(m[0], "S%d" % m[0]) for m in METRICS])
+    out += ["    </settings>", "</resources>"]
+    return "\n".join(out) + "\n"
+
+
+def labels_mc():
+    refs = ",\n            ".join("Rez.Strings.L%d" % m[0] for m in METRICS)
+    return ("// Generated by tools/gen_resources.py, do not edit by hand.\n"
+            "import Toybox.Lang;\n"
+            "import Toybox.WatchUi;\n\n"
+            "module Labels {\n"
+            "    //! Short tile labels indexed by metric id (see Metrics.mc).\n"
+            "    function load() as Array<String> {\n"
+            "        var ids = [\n            %s\n        ];\n"
+            "        var out = new Array<String>[ids.size()];\n"
+            "        for (var i = 0; i < ids.size(); i++) {\n"
+            "            out[i] = WatchUi.loadResource(ids[i]) as String;\n"
+            "        }\n"
+            "        return out;\n"
+            "    }\n"
+            "}\n") % refs
+
+
+def png(width, height, pixel):
+    raw = b""
+    for y in range(height):
+        raw += b"\x00" + b"".join(bytes(pixel(x, y)) for x in range(width))
+
+    def chunk(kind, data):
+        c = struct.pack(">I", len(data)) + kind + data
+        return c + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9))
+            + chunk(b"IEND", b""))
+
+
+def icon_pixel(x, y, n=40):
+    """Rounded dark square with a zone-coloured power bar chart."""
+    r = 7
+    cx = min(max(x, r), n - 1 - r)
+    cy = min(max(y, r), n - 1 - r)
+    if (x - cx) ** 2 + (y - cy) ** 2 > r * r:
+        return (0, 0, 0, 0)
+    bars = [(6, 12, (0, 119, 255)), (13, 19, (0, 170, 68)), (20, 26, (255, 204, 0)), (27, 33, (255, 51, 0))]
+    heights = [10, 16, 22, 28]
+    for (x0, x1, col), h in zip(bars, heights):
+        if x0 <= x <= x1 and n - 6 - h <= y <= n - 6:
+            return col + (255,)
+    return (24, 24, 28, 255)
+
+
+def main():
+    write("resources/strings/strings.xml", strings_xml("en"))
+    write("resources-ita/strings/strings.xml", strings_xml("it"))
+    write("resources/settings/settings.xml", properties_xml())
+    write("source/Labels.mc", labels_mc())
+    path = os.path.join(ROOT, "resources/drawables/launcher_icon.png")
+    with open(path, "wb") as f:
+        f.write(png(40, 40, icon_pixel))
+    print("wrote resources/drawables/launcher_icon.png")
+
+
+if __name__ == "__main__":
+    main()
